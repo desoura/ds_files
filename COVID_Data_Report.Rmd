@@ -1,0 +1,611 @@
+---
+title: "COVID-19 Data Report"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(ggplot2)
+library(lubridate)
+library(countrycode)
+library(plotly)
+```
+
+## COVID-19 Data Report {.tabset .tabset-pills .tabset-fade}
+
+### Introduction
+#### The Data
+
+The data used for this report is courtesy of John Hopkins University COVID-19. The datasets can be found [here](https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data){target="_blank"}. 
+
+The first two datasets used include a daily count of the cases and deaths, respectively, for every country. The last two datasets include a daily count of the cases and deaths, respectively, for each state of the United States (US). The data ranges between January 2020 and March 2023. The global data is subdivided by province or state, whereas the US data is subdivided by state and county. All data frames contain information about the latitude and longitude corresponding to a given location. 
+
+The data can be read in through the URLs below. Additionally, the packages that will be used for this report have been included below for reference. <b>Note</b>: Please install these packages, if required. 
+
+```{r data read-in, message = TRUE}
+#load in packages
+library(tidyverse)
+library(ggplot2)
+library(lubridate)
+library(countrycode)
+library(plotly)
+
+#read in files
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <-
+  c(
+    "time_series_covid19_confirmed_global.csv",
+    "time_series_covid19_deaths_global.csv",
+    "time_series_covid19_confirmed_US.csv",
+    "time_series_covid19_deaths_US.csv"
+  )
+#string concatenate file names
+urls <- str_c(url_in, file_names)
+
+#read in all files using urls
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+US_cases <- read_csv(urls[3])
+US_deaths <- read_csv(urls[4])
+
+#show summary statistics and quick overview of each frame. 
+head(global_cases)
+head(global_deaths)
+head(US_cases)
+head(US_deaths)
+```
+
+A summary of each dataset has been provided through the included console messages. However, for the purposes of further analyses, data for cases and deaths will be combined (for global and US data individually).
+
+Further data wrangling and transformation will be done for each section in this report. However, an initial tidying step has been included below to show the general structure that will be utilized for the analysis. 
+
+#### Tidying the Data
+First, the global data will be tidied to provide an preliminary data frame. Population data, also provided by John Hopkins University, will be incorporated into the data frames.  
+```{r global initial tidy}
+#Tidy data - global
+global_cases <- global_cases %>%
+  pivot_longer(
+    cols = -c(`Province/State`,
+              `Country/Region`,
+              Lat,
+              Long),
+    #dates in the columns, which serve as names
+    #cases are the data in the dates columns, which are values 
+    names_to = "date",
+    values_to = "cases"
+  ) %>%
+  #clean up lat and long columns since they aren't needed
+  select(-c(Lat, Long))
+
+
+#tidy up global deaths
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c(`Province/State`,
+                         `Country/Region`,
+                         Lat,Long),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(-c(Lat, Long))
+
+#join cases and death data
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = `Country/Region`,
+         Province_State = `Province/State`) %>%
+  #change date to date object
+  mutate(date = mdy(date))
+
+#missing population data for global data set. 
+#need a combined key
+global <- global %>%
+  #create combined key using unite
+  unite("Combined_Key",
+    c(Province_State, Country_Region),
+    #comma separator
+    sep = ", ",
+    na.rm = TRUE,
+    remove = FALSE
+  )
+
+#need population data.
+uid_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+uid <- read_csv(uid_lookup_url) %>%
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+
+#join by population
+global <- global %>%
+  left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, date,
+         cases, deaths, Population,
+         Combined_Key)
+
+summary(global)
+```
+
+The US data can also be tidied in a similar way.
+```{r US initial tidy}
+US_cases <- US_cases %>%
+  #use combined key to retain cols
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  #clean up some more
+  #county name select
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+#do same for US deaths
+US_deaths <- US_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  #clean up some more
+  #county name select
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+
+#join data
+US <- US_cases %>%
+  full_join(US_deaths)
+
+summary(US)
+```
+
+<b>Note</b>: Please click on the tabs at the top of this report to switch between sections. 
+
+### Global Cases and Deaths
+#### The Question
+<b>Main Question</b>: What did the pandemic look like at its "peak" for each country? 
+
+There are many ways to define the "peak" of the pandemic. For the purposes of this analysis, the point in time in which each country reached its max number of COVID-19 cases per million people will be used. To provide more context, a visualization will be created that measures this variable against the number of COVID-19 deaths per million people. 
+
+#### Transforming the Data- "Peak" of the Pandemic
+To visualize the relationship between these variables, a specialized scatter plot, known as a bubble chart, will be used. This visualization allows for an extra dimension to be visualized determined by the size of the bubble. Additionally, the bubbles will be colour-coded to represent the continents. In summary, the following elements are of note: <br>
+- The x-axis: COVID-19 cases per million people for a given country. <br>
+- The y-axis: COVID-19 deaths per million people for a given country. <br>
+- Bubble size: The population of a given country. Larger bubbles represent larger populations. Population data has been sourced from John Hopkins University, as outlined in the previous section.<br>
+- Bubble colour: The continent that a given country belongs to. This will be categorized using the <b>countrycode</b> package. There are some conflicts that arise from the data, which are handled below. <br>
+
+```{r global bubble tidy, warning = TRUE}
+#aggregate data based on totals
+global_total <- global %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  select(Country_Region, date, cases, deaths,
+         Population) %>%
+  ungroup()
+
+#add continent to global
+global_total$Continent <- countrycode(
+  sourcevar = global_total$Country_Region,
+  origin = "country.name",
+  destination = "continent"
+)
+summary(global_total)
+
+```
+There are a number of missing values that are present in the data, particularly in the Population column. The output from the continent classification indicates that further investigation into these values is also required. 
+
+```{r global bubble missing query}
+#investigate missing values and continent conflicts
+non_country <- unique(global_total$Country_Region[which(is.na(global_total$Population))])
+non_country
+
+non_con <- unique(global_total$Country_Region[which(is.na(global_total$Continent))])
+non_con
+```
+
+Investigating the missing values reveals that some non-countries (and countries) have been included in the data, which is why they do not have corresponding population values. These values include cruise ships and Olympic events. This is valuable data, but for the purposes of this analysis, they will not be considered as countries. There seems to be some sort of error in displaying the populations of Canada and China most likely due to the way their provinces have been recorded. These values will be added manually.
+
+There are also some countries that have not been classified by continent. Since they have been included in the COVID-19 data, they will be considered countries for the analysis. Kosovo will be considered a European country, and Micronesia will be considered an Oceanic country.
+
+Finally, once the missing values have been resolved, the number of COVID-19 cases and deaths per million people per country can be added without errors arising.
+
+```{r global bubble missing handling}
+#remove countries that aren't actually countries.
+non_country <- non_country[!non_country %in% c("China", "Canada")]
+
+global_total <- global_total %>%
+  filter(!Country_Region %in% non_country)
+
+sum(is.na(global_total$Population))
+
+#update population values for China and Canada
+pop_china <- uid$Population[uid$Country_Region == "China" &
+                              is.na(uid$Province_State)]
+pop_canada <- uid$Population[uid$Country_Region == "Canada" &
+                               is.na(uid$Province_State)]
+
+global_total <- global_total %>%
+  mutate(Population = case_when(
+    Country_Region == "China" & is.na(Population) ~ pop_china,
+    Country_Region == "Canada" & is.na(Population) ~ pop_canada,
+    TRUE ~ Population
+  ))
+
+#ensure that the number of countries seems reasonable
+length(unique(global_total$Country_Region))
+
+#check population values are reasonable
+min(global_total$Population)
+max(global_total$Population)
+
+#Add in Kosovo and Micronesia's continents
+kos <- global_total$Country_Region == "Kosovo"
+global_total$Continent[kos] <- "Europe"
+micro <- global_total$Country_Region == "Micronesia"
+global_total$Continent[micro] <- "Oceania"
+
+unique(global_total$Continent)
+sum(is.na(global_total))
+
+#add cases and deaths per thousand people
+global_total <- global_total %>%
+    mutate(deaths_per_mill = deaths *1000000/ Population) %>%
+    mutate(cases_per_mill = cases *1000000/ Population)
+```
+
+
+#### Visualizing the Data - "Peak" of the Pandemic
+Now that the data has been transformed and the missing values have been addressed, the visualization can be created. Since a bubble chart of this scale has a great deal of information, an interactive graph is useful for users to further investigate the data. An interactive plot will be created using the <b>plotly</b> package.
+
+```{r global bubble visualization}
+#peak of the pandemic values
+global_max_cases <- global_total %>%
+  group_by(Country_Region) %>%
+  slice(which.max(cases))
+
+#capture American cases as a benchmark. 
+amer_cases <- global_max_cases %>%
+  filter(Country_Region == "US")
+
+#create visualization
+global_max_cases %>%
+  plot_ly(
+    type = "scatter",
+    mode = "markers",
+    #round values
+    x = ~round(cases_per_mill, digits = 2),
+    y = ~round(deaths_per_mill, digits = 2),
+    size = ~Population,
+    color = ~Continent,
+    #alter size of markers slightly for clarity
+    marker = list(sizeref = 0.4, sizemode = "area"),
+    text = ~Country_Region
+  ) %>%
+  layout(
+    title = "Peak Global COVID-19 Cases and Deaths per Million",
+    xaxis = list(title = "Cases per Million"),
+    yaxis = list(title = "Deaths per Million"),
+    #add annotation to highlight the US.
+    annotations = list(
+      x = amer_cases$cases_per_mill,
+      y = amer_cases$deaths_per_mill,
+      text = amer_cases$Country_Region,
+      xref = "x",
+      yref = "y",
+      showarrow = FALSE
+    )
+  )
+
+
+```
+
+
+This provides a snapshot of what each country's "peak" looks like. However, this raises the question of how trends are measured over time. The "peak" does not reflect the nuances in case or death trajectories. These might occur due to considerations such as adopting new policies or rolling out vaccines. The data point for the United States has been labelled to serve as a benchmark.
+
+#### Transforming the Data - Cases and Deaths over Time 
+Visualizing trends over time can aid in understanding how COVID-19 has affected countries over time. To do this, an animated plotly visualization can be created.
+
+An important caveat is that the population for a given country will change over time. This is further complicated by reporting measures during the pandemic. For the purpose of this analysis, the populations used will remain static.
+
+First, the data will be transformed to capture the cases and deaths per million per month for each country. In this case, the "per month" value will be obtained by taking the number of cases and deaths for the last day of each month. Since the data is cumulative, this will, by default, represent the number of cases at the end of a given month. Since the data only extends to 2023-03-09, this day will represent the last day of March 2023.
+
+
+```{r global bubble over time transform}
+#find the range of the dates
+range(global_total$date)
+#create a vector consisting of the last day of every month
+month_dates <- seq(as.Date("2020-02-01"), length = 39, by = "1 month")-1
+#replace value for March - data only goes up to March 9
+month_dates <- replace(month_dates,month_dates == "2023-03-31", as.Date("2023-03-09"))
+#filter global data set by last day of every month. 
+global_monthly_totals <- global_total %>%
+  filter(date %in% month_dates)
+
+#the "animation" frame works by transforming dates to factors.
+global_monthly_totals$date <- as.factor(global_monthly_totals$date)
+```
+
+#### Visualizing the Data - Cases and Deaths over Time 
+<b>Note:</b> To see the reported cases and deaths per million each month by country, click the "play" button below. The slider can be used to navigate to a specific month. The date is displayed above the slider. 
+
+```{r global bubble over time visualization}
+global_monthly_totals %>%
+  plot_ly(
+    type = "scatter",
+    mode = "markers",
+    x = ~round(cases_per_mill, digits = 2),
+    y = ~round(deaths_per_mill, digits = 2),
+    size = ~Population,
+    color = ~Continent,
+    marker = list(sizeref = 0.4, sizemode = "area"),
+    #animate using the frame parameter
+    frame = ~date,
+    text = ~Country_Region
+  ) %>%
+  layout(
+    title = "Global COVID-19 Cases and Deaths per Million Over Time",
+    xaxis = list(title = "Cases per Million"),
+    yaxis = list(title = "Deaths per Million")
+  ) %>%
+  #alter the speed slightly for visual clarity
+  animation_opts(
+    750,
+    redraw = FALSE
+  ) %>%
+  #rename the prefix that appears before the date
+  animation_slider(
+    currentvalue = list(prefix = "Date: ")
+  )
+```
+
+#### Analysis and Future Directions
+```{r global bubble analysis}
+amer_cases
+
+global_max_cases[which.max(global_max_cases$cases_per_mill),]
+global_max_cases[which.max(global_max_cases$deaths_per_mill),]
+mean(global_max_cases$cases_per_mill)
+```
+The country with the most COVID-19 cases per million at its peak is San Marino. San Marino has a population of approximately 34,000 and had close to 24,000 cases at its peak.The country with the most deaths per million is Peru. On average, there were 169,917 cases per million people across all countries when considering the peak for each country. America, at its peak, had 315,063 cases per million people. 
+
+When considering trends by continental region, European countries have varying cases per million, but middling deaths per million. Countries in the Americas and Africa are generally on the lower end of cases and deaths per million. A strong trend does not persist for Asian countries. Oceania has varying cases per million, but low deaths per million. 
+
+The temporal changes in cases and deaths per million can also be analyzed by observing the changes in the number of cases per month. The ratio between cases and deaths per million remains fairly consistent on a country-by-country level until the end of 2021. There is a noticeable spike in the number of cases per million at this time, but not a large shift in the number of deaths per million. A number of factors could contribute toward this observed trend, such as vaccination rates, policy changes, and COVID-19 variants. 
+
+Future directions for analysis include some of the epidemiological considerations for the spread of viruses. The incorporation of variables regarding vaccines, policies regarding practices for COVID-19, awareness campaigns, and hospitalization rates serve as interesting future directions for better understanding the trends observed in the spread of COVID-19. 
+
+
+### US Data - Regional Cases
+#### The Question
+<b>Main Question</b>: How did the United States fare in terms of cases and deaths at the state level?
+
+To explore the effects of COVID-19 in the US, a choropleth map can be created. The ratio between cases and deaths, or fatalities, can serve as a measure of the performance of each individual state. 
+
+#### Transforming the Data - US Case to Fatality Ratio
+To investigate further, the data must be tidied further to handle missing values and aggregate cases at the state level. 
+
+```{r map missing tidy}
+#subset values that are missing
+US_missing <- US[which(is.na(US$Admin2)),]
+US_missing_PS <- unique(US_missing$Province_State)
+US_missing_PS
+
+#filter data
+US <- US %>%
+  filter(!Province_State %in% US_missing_PS)
+sum(is.na(US))
+```
+
+Some of the missing values stem from the inclusion of US territories. While this is valuable data, the analysis is focused on the effect of the pandemic on the states of the US. As such, these values can be safely removed without having an impact on the analysis.
+
+The last available day of the data will be used to determine the case to fatality ratio, as the cumulative data will represent the totality of these variables. 
+
+```{r map state transform}
+#cases/deaths by state
+US_by_state <- US %>%
+  #group data by state, region
+  group_by(Province_State, Country_Region, date) %>%
+  #for each state, take the cases to be the sum of cases in the state
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  #filter only last day in data frame
+  filter(date == as.Date("2023-03-09")) %>%
+  #add case:fatality ratio
+  mutate(cases_to_deaths = cases/deaths) 
+
+#check which states aren't supposed to be part of the 50
+#state.name is a built-in vector. 
+not_states <- US_by_state[!US_by_state$Province_State %in% state.name ,]
+not_states
+
+US_by_state <- US_by_state %>%
+  filter(!Province_State %in% not_states$Province_State)
+
+
+#add state abbreviations for graphing purposes.
+US_by_state$State_Abbr <- state.abb
+
+```
+
+To complete the visualization, the data included must only be the 50 US states. Puerto Rico and the District of Columbia have been included in the COVID-19 data at the state level. For the purpose of this analysis, they will be removed to maintain the focus on states. Abbreviations for each state have been including using the built-in R state data. These are required for the <b>plot_geo</b> function. 
+
+#### Visualizing the Data - US Case to Fatality Ratio
+```{r US map visualization}
+US_by_state %>%
+  #indicate that US states are being used
+  plot_geo(
+    locationmode = 'USA-states'
+  ) %>%
+  add_trace(
+    z= ~cases_to_deaths,
+    locations = ~State_Abbr,
+    color= ~cases_to_deaths,
+    hoverinfo = 'text',
+    #alter the text that appears on hover
+    text = ~paste(
+      '</br> State: ', Province_State, ' (',State_Abbr ,')',
+      '</br> Ratio: ', round(cases_to_deaths, digits = 2),
+      '</br> Cases: ', round(cases, digits = 2),
+      '</br> Deaths: ', round(deaths, digits = 2)
+    )
+  ) %>%
+  layout(
+  #zoom into graph so that only the US is seen.
+   geo = list(scope = 'usa'),
+   title = "COVID-19 Case to Fatality Ratio for US States"  
+   ) %>%
+  #change legend title - slightly different procedure for continuous scale legends.
+  colorbar(title = "Case to Fatality Ratio")
+```
+
+```{r map analysis}
+US_by_state %>%
+  #"ungroup" here for the following operations.
+  ungroup() %>%
+  arrange(desc(cases_to_deaths)) %>%
+  slice(1, length(US_by_state$cases_to_deaths))
+mean(US_by_state$cases_to_deaths)
+```
+
+#### Future Directions and Analysis
+The state with the lowest case to death ratio is Pennsylvania. The highest ratio is Alaska. On average, the case to fatality ratio was 101 cases:deaths.  While the ratio accurately represents the relationship between cases and deaths, it does not reflect the population sizes of each state.  
+
+This ratio does provide some insight into COVID-19 activity at the state level, but it may not capture the nuances of COVID-19 transmission. Future directions may include the integration of vaccination rates and population sizes. Additionally, further analysis of states grouped by their respective regions would provide higher-order trends. 
+
+### Model - COVID-19 in the Americas
+#### The Question
+<b>Main question</b>: Is there a relationship between the number of cases per million and deaths per million for countries in the Americas? 
+
+To answer this question, a simple linear model will be created to determine if it is an appropriate way to describe the relationship between cases and deaths per million. 
+
+#### Transforming the Data - COVID-19 in the Americas
+First, the "peak" COVID-19 data will be repurposed. It will be filtered to only contain values for countries in the Americas. Please note that the "peak" here represents the day that the cases reached a maximum point for individual countries. 
+```{r model data transform}
+#filter max cases data 
+americas_max_cases <- global_max_cases %>%
+  filter(Continent == "Americas")
+
+#preliminary missing checks 
+sum(is.na(americas_max_cases))
+
+```
+
+#### Visualizing the Data - COVID-19 in the Americas
+```{r model data visualization}
+#linear model
+mod <- lm(deaths_per_mill ~ cases_per_mill, data = americas_max_cases)
+summary(mod)
+
+#use linear model to predict deaths based on linear model.
+americas_max_cases_pred <- americas_max_cases %>%
+  ungroup() %>%
+  mutate(pred = predict(mod))
+
+#to see how good our model is, we can plot predictions against actual values.
+americas_max_cases_pred %>%
+  plot_ly(
+    type = "scatter",
+    mode = "markers",
+    x = ~cases_per_mill,
+    y = ~deaths_per_mill,
+    text = ~Country_Region,
+    name = "Actual"
+  ) %>%
+  add_trace(
+    x = ~cases_per_mill,
+    y = ~pred,
+    text = ~Country_Region,
+    name = "Predicted"
+  ) %>%
+  layout(
+    title = "Predicted and Actual COVID-19 Cases and Deaths per Million - The Americas",
+    xaxis = list(title = "Cases per Million"),
+    yaxis = list(title = "Deaths per Million")
+  )
+
+```
+
+There is a clear outlier present in the data. Peru has an extremely high deaths per million value in comparison to its cases per million. As an exercise, Peru's values will be removed to observe how its effect on the analysis. 
+
+```{r model data peru remove}
+americas_max_cases_outlier <- americas_max_cases %>%
+  filter(!Country_Region == "Peru")
+
+mod1 <- lm(deaths_per_mill ~ cases_per_mill, data = americas_max_cases_outlier)
+summary(mod1)
+
+americas_max_cases_outlier_pred <- americas_max_cases_outlier %>%
+  ungroup() %>%
+  mutate(pred = predict(mod1))
+
+americas_max_cases_outlier_pred %>%
+  plot_ly(
+    type = "scatter",
+    mode = "markers",
+    x = ~cases_per_mill,
+    y = ~deaths_per_mill,
+    text = ~Country_Region,
+    name = "Actual"
+  ) %>%
+  add_trace(
+    x = ~cases_per_mill,
+    y = ~pred,
+    text = ~Country_Region,
+    name = "Predicted"
+  ) %>%
+  layout(
+    title = "Predicted and Actual COVID-19 Cases and Deaths per Million - The Americas",
+    xaxis = list(title = "Cases per Million"),
+    yaxis = list(title = "Deaths per Million")
+  )
+
+```
+
+#### Future Directions and Analysis - COVID-19 in the Americas
+```{r}
+#min/max values
+americas_max_cases_pred %>%
+  ungroup() %>%
+  #arrange in ascending order - least to most dpm
+  arrange((deaths_per_mill)) %>%
+  slice(1:5, (length(deaths_per_mill)-4):length(deaths_per_mill)) %>%
+  select(Country_Region,cases_per_mill, deaths_per_mill, pred, everything())
+
+americas_max_cases_pred %>%
+  ungroup() %>%
+  #arrange in ascending order - least to most dpm
+  arrange((pred)) %>%
+  slice(1:5, (length(deaths_per_mill)-4):length(deaths_per_mill)) %>%
+  select(Country_Region,cases_per_mill, deaths_per_mill, pred, everything())
+
+americas_max_cases_outlier_pred %>%
+  ungroup() %>%
+  arrange((deaths_per_mill)) %>%
+  slice(1:5, (length(deaths_per_mill)-4):length(deaths_per_mill)) %>%
+  select(Country_Region,cases_per_mill, deaths_per_mill, pred, everything())
+
+americas_max_cases_outlier_pred %>%
+  ungroup() %>%
+  arrange((pred)) %>%
+  slice(1:5, (length(deaths_per_mill)-4):length(deaths_per_mill)) %>%
+  select(Country_Region,cases_per_mill, deaths_per_mill, pred, everything())
+
+
+```
+
+<b>Base model</b>: In the base model, the model has an intercept value of 1054. The slope value is 0.006269; for every additional case per million, it is expect that there is an additional 0.006269 deaths per million. The model has an adjusted R-squared value of 0.1822 and a residual standard error of 1135 with 33 degrees of freedom. In this version, Nicaragua has the lowest actual and predicted deaths per million. Peru has the highest actual deaths per million, whereas Barbados has the highest predicted deaths per million. 
+
+<b> Alternate model - outlier removed </b>: In this version of the model, the model has an intercept value of 916. The slope value is 0.006254 for every additional case per million, it is expected that there is an additional 0.006254 deaths per million. The model has an adjusted R-squared value of 0.3431 and a residual standard error of 776.5 with 32 degrees of freedom. In this version, Nicaragua has the lowest actual and predicted deaths per million. The United States has the highest actual deaths per million, and Barbados has the highest predicted deaths per million. 
+
+When outliers are removed, there is a moderate linear correlation between the cases and deaths per million in the Americas. This analysis is a preliminary one to demonstrate the correlation between just two variables. Future directions can expand and potentially improve on this model. Some future directions that this model may take include vaccination rates, temporal effects, and input related to variants. Different versions of this model may also expand the data to include other countries, or subdivide the data into "North" and "South" America. 
+
+### Conclusion
+#### Sources of Bias
+The visualizations and analysis presented in this report provide insight into the trends and patterns regarding the COVID-19 pandemic. However, it is important to examine potential sources of bias when drawing conclusion about the results. 
+
+One potential source of bias lies in the reporting measures. Global data contains confirmed cases and deaths as a result of COVID-19. If the way in which data is captured and recorded relating this data is not consistent across individual countries, this may be reflected as inaccuracies or inconsistencies in the analysis. 
+
+On a systemic level, interpretation of the data needs to be handled with care. It is important to be mindful of how access to hospital equipment, vaccines, and personal protective equipment may be reflected in the number of cases and deaths. Furthermore, the cultural conception of public health may result in differing approaches to combating COVID-19, which may also be reflected in observed trends. Another systemic consideration that may have an affect on the analysis is the racial and ethnic disparities in COVID-19 infection, hospitalization, and transmission that may persist due to a number of socioeconomic factors. 
+
+It is possible that personal biases may have influenced the data analysis. Topics of contention that have the potential to influence the analysis include a Western conception of medicine, health, and treatment; full support of vaccinations being mandatory; a scientific background in biology and public health; and the benefit of hindsight when drawing conclusions about the data after the pandemic has ended. To mitigate these personal biases, the analysis presented is focused on objective results and information. The conclusions drawn pertain only to what can be ascertained statistically. While certain forms of biases cannot be fully prevented, they have been recorded to promote transparency in data analysis. 
+
+#### Conclusion
+The report presented has produced results related to the temporal and geospatial aspects of the COVID-19 pandemic. There are a number of future directions that can be taken to expand or enhance the results presented. Furthering the understanding of a global pandemic will help promote an understanding in preventing and controlling future global pandemics. 

@@ -1,0 +1,332 @@
+---
+title: "NYPD Shooting Incident Data Report"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(tidyverse)
+library(ggplot2)
+library(leaflet)
+library(leaflet.extras)
+library(lubridate)
+library(forecast)
+```
+
+## NYPD Shooting Incident Data {.tabset .tabset-pills .tabset-fade}
+
+### Introduction
+#### The Dataset
+
+The data set used for this report is the New York Police Department (NYPD) Shooting Incident Data (Historic), a public access data set courtesy of the City of New York. The data set can be found [here](https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic){target="_blank"} and more information about the data, including a data dictionary, can be found [here](https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8/about_data){target="_blank"}. 
+
+The data contains a breakdown of every shooting incident in New York City between 2006 and 2022. The data includes information about the event, the location, date, and time of the occurrence, the suspect and victim demographics, and information about fatality.
+
+The data can be read in through the URL below. Packages that will be used in this report have been included. 
+```{r data read-in}
+#load in packages
+library(tidyverse)
+library(ggplot2)
+library(leaflet)
+library(leaflet.extras)
+library(lubridate)
+library(forecast)
+
+#load data in a way that is reproducible
+nypd_data <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+```
+
+
+The console message created when reading in the data set has been retained to show the general structure of the data set. 
+
+While the scope of the data set is broad, this report will focus on temporal and spatial aspects. As such, the data can be tidied and transformed to only focus on variables related to geography and time. 
+
+#### Tidying the Data
+Once the data has been read in, it can be tidied by removing some of the columns that will not be used in this analysis. The proper format for variables will be ensured.
+
+The <b>head()</b> function is used to get an idea of what the tidied data looks like.The <b>str()</b> function is used to confirm our data structure looks correct at first glance. The <b>summary()</b> can also provide information about missingness, which is useful when creating visualizations. 
+```{r data initial tidy}
+#next step - tidy data 
+nypd_data <- nypd_data %>%
+  select(c(
+    OCCUR_DATE, OCCUR_TIME, BORO,
+    Longitude, Latitude
+  )) %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+
+head(nypd_data)
+str(nypd_data)
+summary(nypd_data)
+```
+
+
+Any further transformations - including handling missing values - will be done for specific visualizations in their respective tabs of this report. 
+
+<b>Note</b>: Please click on the tabs at the top of this report to switch between sections. 
+
+### Heatmap of Incidents
+
+#### The Question
+<b>Main question</b>: How can areas where shooting incidents occur in New York City be visualized?
+
+To answer this question, a geographic heatmap of all the shooting incidents can be created. The footnotes [found here](https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8/about_data){target="_blank"} corresponding to this data provide additional context and considerations that should be kept in mind when manipulating data:<br>
+<em>
+- A shooting incident can have multiple victims involved and as a result duplicate INCIDENT_KEY’s are produced. Each INCIDENT_KEY represents a victim but similar duplicate keys are counted as one incident.<br>
+- Shooting incidents occurring near an intersection are represented by the X coordinate and Y coordinates of the intersection Shooting incidents occurring anywhere other than at an intersection are geo-located to the middle of the nearest street segment where appropriate.<br>
+- Any attempt to match the approximate location of the incident to an exact address or link to other datasets is not recommended.<br>
+- Many other shooting incidents that were not able to be geo-coded (for example, due to an invalid address) have been located as occurring at the police station house within the precinct of occurrence.<br>
+- Shooting incidents occurring in open areas such as parks or beaches may be geo-coded as occurring on streets or intersections bordering the area.<br>
+- Shooting incidents occurring on a moving train on transit systems are geo-coded as occurring at the train’s next stop.<br>
+- All shooting incidents occurring within the jurisdiction of the Department of Correction have been geo-coded as occurring on Riker’s Island.<br>
+</em>
+
+#### Transforming the Data
+With these considerations in mind, a heatmap can still be used to determine geospatial trends. Data can be transformed to groups of incidents by their latitudes and longitudes.
+```{r heatmap data, message=FALSE}
+#get unique counts of lat/long
+ny_map_data <- nypd_data %>%
+  group_by(Latitude, Longitude) %>%
+  summarize(Freq = n())
+
+summary(ny_map_data)
+```
+
+The original dataset had 10 missing values for latitude and longitude, which amounts to 2 missing values in the transformed set. Since the original data has 27,312 incidents originally, <b>10 missing cases is approximately 0.04% of the entire set</b>. Simply dropping these missing values is an appropriate course of action.
+
+```{r heatmap missingness}
+#remove rows with missingness
+ny_map_data <- ny_map_data %>%
+  drop_na(Longitude)
+summary(ny_map_data)
+```
+
+#### Visualizing the Data
+Now that the data has been transformed, the heatmap can be created using the <b>leaflet()</b> and <b>leaflet.extras()</b> packages.
+```{r heatmap visualization}
+#create a range of colours from 0 to the max value of the data
+col_val <- 0:max(ny_map_data$Freq)
+pal <- colorNumeric("Spectral", domain = col_val, na.color = "transparent",
+                    reverse = TRUE)
+
+
+leaflet(ny_map_data) %>%
+  addTiles() %>%
+  #set view to the center of the city; zoom out a little 
+  setView(-74.00, 40.71, zoom = 12) %>%
+  addHeatmap(lng = ~Longitude, lat = ~Latitude, intensity = ~Freq,
+             blur = 40, max = 0.05, radius = 15) %>%
+  addLegend("bottomleft", pal = pal, values = ~Freq, title = "Incidents")
+```
+##### Shooting Incidents in New York City: 2006-2022
+
+#### Analysis and Future Directions
+```{r heatmap analysis}
+ny_map_data %>%
+  subset(Freq == max(Freq))
+#print mean and median frequencies
+mean(ny_map_data$Freq)
+median(ny_map_data$Freq)
+```
+
+The visualization demonstrates that areas of New York City have varying concentrations  of shooting incidents. While the average number of shooting incidents is relatively low (mean: 2.16; median: 1), there is an area in which 66 events occurred at the location listed above. This location corresponds to an area roughly in Northeast Brooklyn (keeping in mind that, as mentioned in the footnotes of this data set, locations can be relative).
+
+This raises some questions, such as how the distribution of incidents occurs over time and across the boroughs. Questions of interest that are out of the scope of this report include how shooting incidents vary by the type of incident or context and the prevalence of multiple incidents as part of the same event.
+
+### Incidents by Borough
+
+#### The Question
+<b>Main question</b>: How does the shooting incident data look when considering each borough of New York City?
+
+Now that a visual that displays the physical location of all the shooting incidents has been created, understanding the patterns of incidents in geographic areas is of interest. 
+
+#### Transforming the Data
+```{r borough tidy}
+ny_boro_incidents <- nypd_data %>%
+  #group by borough
+  group_by(BORO) %>%
+  summarize(Incidents = n())
+
+summary(ny_boro_incidents)
+```
+There is no missing data in this data frame.
+
+#### Visualizing the Data
+```{r borough visualization}
+ny_boro_incidents %>%
+  ggplot(aes(x = BORO, y = Incidents)) +
+  geom_bar(stat = 'identity', fill = "blue") +
+  labs(title = "Shooting Incidents in New York City by Borough", x = "Borough",
+       y = "Number of Incidents") 
+
+```
+
+This visualization provides insight into how shooting incidents occur over geographic area. Between the 2006 and 2022 period, the most shooting incidents occurred in Brooklyn, followed by the Bronx, Queens, Manhattan, and Staten Island. However, this raises an additional question - how does this vary over time? This can be investigated by categorizing the data by year.
+
+#### Transforming the Data
+```{r borough time tidy, message=FALSE}
+ny_boro_time <- nypd_data %>%
+  #organize data by year.
+  mutate(Year = floor_date(OCCUR_DATE, "year")) %>%
+  #group by borough and time
+  group_by(Year, BORO) %>%
+  summarize(Incidents = n())
+
+summary(ny_boro_time)
+```
+Since there was no missing data in the previous frame from which this data frame was derived, there should still be no missing data.
+
+#### Visualizing the Data
+```{r borough time visualization}
+ny_boro_time %>%
+  #do things a bit differently - year as independent variable
+  ggplot(aes(x = Year, y = Incidents)) +
+  geom_bar(stat = 'identity', fill = "blue") +
+  #create five graphs on the same axes for each borough
+  facet_wrap(~BORO) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title= "Shooting Incidents in New York by Borough Over Time",
+       y = "Number of Incidents")
+```
+
+#### Analysis and Future Directions
+```{r borough analysis}
+#max number of shooting incidents for each borough
+aggregate(x = ny_boro_time$Incidents,
+          by = list(ny_boro_time$BORO),
+          FUN = max)
+#mean number of shooting incidents for each borough
+aggregate(x = ny_boro_time$Incidents,
+          by = list(ny_boro_time$BORO),
+          FUN = mean)
+```
+These visualization provides more insight into the trends over time concerning the shooting incidents across boroughs in New York City. The latter visualization provides context related to shooting incidents between 2006 and 2022. In a given year, Brooklyn has the highest number of shooting incidents, with the exception of 2021 where the Bronx did.
+
+The mean and max numbers of shooting incidents have been presented above for each borough. The boroughs have seen a general decrease in the number of shooting incidents between 2017-2019, followed by an increase in the number of shooting incidents between 2020-2022 (using 2016 as a baseline).
+
+Additional questions that arise from this analysis out of the scope of this report include understanding the context of these values per capita of each borough and analyzing motivations or causes (including historic events) for these shooting incidents.
+
+
+### Model - Incidents Over Time
+
+#### The Question
+<b>Main question</b>: Can patterns in the number of shooting incidents over time be observed and predictions about the number of shooting incidents for future time periods be made?
+ 
+
+#### Transforming the Data
+To answer this question, this data can be transformed to represent monthly instead of  daily data. Patterns over time may be easier to observe in this format.
+```{r ts intro tidy}
+#calculate the number of shootings per month.
+ny_monthly_incidents <- nypd_data %>%
+  #create a variable that takes the "floor" of each month - the 1st
+  mutate(Month = floor_date(OCCUR_DATE, "month")) %>%
+  group_by(Month) %>%
+  #sum the number of incidents per month.
+  summarize(Shooting_Incidents = n()) 
+
+#exploratory checks - max number of incidents in a day and data head structure.
+max(ny_monthly_incidents$Shooting_Incidents)
+head(ny_monthly_incidents)
+summary(ny_monthly_incidents)
+```
+
+There is no missing data in this data frame. No imputation or missing data measures are needed. 
+
+Note that the date format lists every month as the "first" of the month. This is acceptable, as R's date format requires a "day" for its structure. For the purposes of the analysis, this will not affect the results.
+
+#### Visualizing the Data
+```{r ts intro visualization}
+ny_monthly_incidents %>%
+  ggplot(aes(x = Month, y = Shooting_Incidents)) +
+  #plot a line graph of the incidents.
+  #do want to see trends here, so it's fine to have a connected series.
+  geom_line(color = "orange") +
+  #some aesthetic considerations
+  theme_minimal()+
+  labs(title = "Monthly Shooting Incident Data in New York City",
+       x = "Time",
+       y = "Number of Incidents")
+```
+
+Upon first glance, there appears to be some seasonality in the data. This will be investigated further. Some crests and troughs are present. A large number of incidents can be seen in mid-2020. While there is some variation present, the number of incidents is not increasing or decreasing rapidly over time.
+
+#### Converting the Data into a Time Series
+The data needs to be in the appropriate format for a time series to investigate further. This can be done by converting the data into a "ts" class.
+
+```{r}
+#confirm the minimum and maximum dates in the data
+min(ny_monthly_incidents$Month)
+max(ny_monthly_incidents$Month)
+
+ny_monthly_ts <- ts(ny_monthly_incidents$Shooting_Incidents,
+                    #add start and end dates based on min and max
+                    start = c(2006,1),
+                    end = c(2022,12),
+                    #specify monthly data
+                    frequency = 12)
+```
+
+Now that the data is in a time series format, a seasonality chart can be created using the <b>forecast</b> package.
+```{r seasonality visualization}
+ggseasonplot(ny_monthly_ts) +
+  theme_minimal() +
+  labs(title = "Seasonal Shooting Incident Data in New York City",
+       y = "Number of Incidents")
+```
+
+The seasonal data visualization shows that there is some seasonality present. More shooting incidents are reported during the months in the middle of the year, with lower numbers observed during the first few and last few months of the year. The data is not differenced, as it represents month-to-month values (not the change between months). These considerations will be taken into account as a preliminary ARIMA model will be created. 
+
+#### Modelling the Data - ARIMA
+For the purposes of this analysis, the auto.arima() function in the forecast package will be used, but a visualization of the ACF and PACF values will be presented to show the strength of the model. 
+
+```{r arima model}
+ny_monthly_ts %>%
+  diff(lag = 12) %>% #seasonal difference
+  ggtsdisplay(xlab = "Month",
+              main = "Seasonally Differenced Incidents")
+#fit data
+ny_fit <- auto.arima(ny_monthly_ts)
+summary(ny_fit) #print summary to validate model.
+
+autoplot(forecast(ny_fit)) +
+  aes(color = "orange") +
+  xlab("Month") +
+  ylab("Number of Incidents") +
+  ggtitle("Forecasted Monthly Shooting Incident Data in New York") +
+  theme_minimal()+
+  theme(legend.position = "none")
+```
+
+#### Analysis and Future Directions
+```{r ts analysis}
+#Look at first few values of model.
+forecast(ny_fit, h =12)
+
+```
+
+By using an ARIMA model to forecast future shooting incidents, predictions can be made about the number of shooting incidents in future years. By using a ARIMA(1,0,0)(1,1,0)[12] model, a time series is forecasted with an AICc of 1862.25 and a RMSE of 29.14876. For the purposes of this analysis, this is a simple model that uses all of the given data as training data. 
+
+The table above presents the expected number of shootings predicted by the model over 2023. While this year has elapsed, data is not available in the given data set for this time frame. The point forecasts indicate that the 2023 year will start with 76 incidents, "peak" in July with 214, and end in December with 120. This pattern loosely follows the seasonal trend observed in the data.
+
+One future direction that could be explored is to compare the model to actual data once the 2023 shooting incident reports have been released. Additional questions that may arise from this analysis may include how the forecasts may vary with other variables by integrating regression into the model, an investigation into the seasonality of shooting incidents, and further analysis regarding temporal shooting incident data by borough.
+
+
+### Conclusion
+#### Sources of Bias
+The visualizations and analysis presented in this report do provide some insight in to the trends and patterns involved in New York shooting incidents. However, it is important to examine potential sources of bias when drawing conclusions about the results.
+
+
+One potential source of bias is a systemic consideration. The data represents reported incident data. Are there situations in which an incident was not reported? What factors play in to this potential under-representation of data, and how might the data look different these potentially unreported incidents are considered?
+
+The way in which incidents are captured may contribute to bias. There is no context included in the data, such as motivations or reasons for the incidents. This data could aid in better understanding the data and affect the conclusions made. Understanding potential causes for outliers could also be reached with more information, such as historic events related to shooting incidents. The footnotes of the data state that incidents with multiple victims are represented using they same key, but no other information is provided.
+
+Additionally, as  mentioned in the heatmap data introduction, is that geolocation data has some specific encoding when it comes to the recorded values. These serve as a form of bias. "High-crime areas" may correlate with high-traffic areas, which should be investigated further. 
+
+Political information may also be intertwined in the data and could aid in understanding the observed trends. Variables such as perceptions around gun control, the presence of organized criminal activity, and relevant laws or statutes passed may be of importance. 
+
+Although this analysis does not include models involving race and gender, it is important to be mindful of how these variables are used in a potential model.
+
+It is possible that personal biases influenced to the data analysis. Topics of contention that have the potential to influence the analysis include pro-gun control, considerations for police reform, and perceptions of Americans as a non-citizen and non-resident of America. To mitigate personal bias, the analysis presented is focused on objective results found in the analysis. The conclusions drawn pertain only to what can be found statistically and superfluous assertions have been minimized. While systemic biases cannot fully be mitigated, they have been recorded above to promote transparency in data analysis. 
+
+#### Conclusion
+The report presented has produced results related to the temporal and geospatial nature of shooting incidents in New York City. However, there are many future directions that can be taken to understand the holistic nature of firearm activity in New York. 
+

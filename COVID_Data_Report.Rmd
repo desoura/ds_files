@@ -17,6 +17,8 @@ library(plotly)
 ### Introduction
 #### The Data
 
+The intent of this report is to better understand trends related to the COVID-19 pandemic on the national, international, and global scale. This will be done by analyzing geographic and temporal data for the number of cases and deaths of the COVID-19 pandemic. 
+
 The data used for this report is courtesy of John Hopkins University COVID-19. The datasets can be found [here](https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data){target="_blank"}. 
 
 The first two datasets used include a daily count of the cases and deaths, respectively, for every country. The last two datasets include a daily count of the cases and deaths, respectively, for each state of the United States (US). The data ranges between January 2020 and March 2023. The global data is subdivided by province or state, whereas the US data is subdivided by state and county. All data frames contain information about the latitude and longitude corresponding to a given location. 
